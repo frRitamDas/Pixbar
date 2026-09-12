@@ -51,8 +51,9 @@ jobs:
           RELEASE_REF_TYPE: ${{ github.ref_type }}
           RELEASE_MODE: ${{ inputs.mode }}
         run: |
+          set -euo pipefail
           [[ "${RELEASE_REF_TYPE}" == "branch" ]] || { echo "Releases must run from a branch." >&2; exit 1; }
-          [[ "${RELEASE_BRANCH}" == "${DEFAULT_BRANCH}" ]] || { echo "Releases must run from default branch ${DEFAULT_BRANCH}." >&2; exit 1; }
+          [[ "${RELEASE_BRANCH}" == "${DEFAULT_BRANCH}" || "${RELEASE_BRANCH}" == "cmp-rewrite" ]] || { echo "Releases must run from ${DEFAULT_BRANCH} or cmp-rewrite." >&2; exit 1; }
           git rev-parse --verify --quiet "refs/tags/${RELEASE_TAG}" && { echo "Tag ${RELEASE_TAG} already exists." >&2; exit 1; } || true
           if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" >/dev/null 2>&1; then echo "Release ${RELEASE_TAG} already exists." >&2; exit 1; fi
           if [[ "${RELEASE_MODE}" != "dry-run" && ( -z "${RELEASE_PROPERTIES_BASE64}" || -z "${RELEASE_KEYSTORE_BASE64}" ) ]]; then echo "Required Android release secrets are missing." >&2; exit 1; fi
@@ -103,36 +104,49 @@ jobs:
           store_password="$(sed -n 's/^PIXBAR_RELEASE_STORE_PASSWORD=//p' local.properties)"
           key_alias="$(sed -n 's/^PIXBAR_RELEASE_KEY_ALIAS=//p' local.properties)"
           key_password="$(sed -n 's/^PIXBAR_RELEASE_KEY_PASSWORD=//p' local.properties)"
-          [[ -n "${store_password}" && -n "${key_alias}" && -n "${key_password}" ]] || {
-            echo "Android release signing properties are incomplete." >&2
-            exit 1
-          }
+          [[ -n "${store_password}" && -n "${key_alias}" && -n "${key_password}" ]] || { echo "Android release signing properties are incomplete." >&2; exit 1; }
+          keytool -list -keystore "${keystore_path}" -storepass "${store_password}" -alias "${key_alias}" >/dev/null || { echo "Store password or alias does not match the release keystore." >&2; exit 1; }
 
-          keytool -list -keystore "${keystore_path}" -storepass "${store_password}" -alias "${key_alias}" >/dev/null || {
-            echo "PIXBAR_RELEASE_STORE_PASSWORD or PIXBAR_RELEASE_KEY_ALIAS does not match the supplied release keystore." >&2
-            exit 1
+          cat > "${RUNNER_TEMP}/ValidatePrivateKey.java" <<'JAVA'
+          import java.io.FileInputStream;
+          import java.security.Key;
+          import java.security.KeyStore;
+          public final class ValidatePrivateKey {
+              public static void main(String[] args) throws Exception {
+                  if (args.length != 3) throw new IllegalArgumentException("usage: <keystore> <alias> <password>");
+                  KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
+                  try (FileInputStream in = new FileInputStream(args[0])) { ks.load(in, args[2].toCharArray()); }
+                  Key key = ks.getKey(args[1], args[2].toCharArray());
+                  if (!(key instanceof java.security.PrivateKey)) throw new IllegalStateException("Private key could not be unlocked");
+              }
           }
-
-          if keytool -exportcert -keystore "${keystore_path}" -storepass "${store_password}" -keypass "${key_password}" -alias "${key_alias}" -rfc >/dev/null 2>&1; then
-            echo "Release keystore and key password validated."
-          elif keytool -exportcert -keystore "${keystore_path}" -storepass "${store_password}" -keypass "${store_password}" -alias "${key_alias}" -rfc >/dev/null 2>&1; then
-            echo "Release key is protected with the store password; normalizing the local release property."
-            sed -i "s/^PIXBAR_RELEASE_KEY_PASSWORD=.*/PIXBAR_RELEASE_KEY_PASSWORD=${store_password}/" local.properties
+          JAVA
+          javac "${RUNNER_TEMP}/ValidatePrivateKey.java"
+          if java -cp "${RUNNER_TEMP}" ValidatePrivateKey "${keystore_path}" "${key_alias}" "${key_password}" >/dev/null 2>&1; then
+            echo "Release private key validated."
+          elif java -cp "${RUNNER_TEMP}" ValidatePrivateKey "${keystore_path}" "${key_alias}" "${store_password}" >/dev/null 2>&1; then
+            echo "Release key uses store password; normalizing local property."
+            python3 - "${store_password}" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path("local.properties")
+          lines = p.read_text().splitlines()
+          password = sys.argv[1]
+          out = ["PIXBAR_RELEASE_KEY_PASSWORD=" + password if line.startswith("PIXBAR_RELEASE_KEY_PASSWORD=") else line for line in lines]
+          p.write_text("\n".join(out) + "\n")
+          PY
           else
-            echo "PIXBAR_RELEASE_KEY_PASSWORD does not unlock alias ${key_alias} in the supplied release keystore. The keystore itself is valid, but the key password secret is mismatched." >&2
+            echo "PIXBAR_RELEASE_KEY_PASSWORD cannot unlock the release private key." >&2
             exit 1
           fi
       - name: Build full release APKs
-        run: ./gradlew :androidApp:assembleFullRelease --stacktrace
+        run: ./gradlew :androidApp:clean :androidApp:assembleFullRelease --stacktrace --no-build-cache
       - name: Rename signed APK outputs
         run: |
           set -euo pipefail
           shopt -s nullglob
           apks=(androidApp/build/outputs/apk/full/release/*.apk)
-          if (( ${#apks[@]} == 0 )); then
-            echo "Android release build completed without producing APK files." >&2
-            exit 1
-          fi
+          (( ${#apks[@]} > 0 )) || { echo "Android release build completed without APK files." >&2; exit 1; }
           for apk in "${apks[@]}"; do
             filename="$(basename "${apk}")"
             if [[ "${filename}" != com.movie.pixbar* ]]; then
@@ -146,12 +160,12 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           apks=(androidApp/build/outputs/apk/full/release/com.movie.pixbar*.apk)
-          (( ${#apks[@]} > 0 )) || { echo "No renamed signed Pixbar APK files were produced." >&2; exit 1; }
+          (( ${#apks[@]} > 0 )) || { echo "No signed Pixbar APK files were produced." >&2; exit 1; }
           apksigner="$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -x "${apksigner}"
           for apk in "${apks[@]}"; do
             "${apksigner}" verify --verbose "${apk}"
-            printf 'Verified signed Pixbar APK: %s\n' "${apk}"
+            echo "Verified signed Pixbar APK: ${apk}"
           done
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v7
