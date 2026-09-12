@@ -1,0 +1,88 @@
+name: Pixbar Android Live Build
+
+on:
+  push:
+    branches:
+      - cmp-rewrite
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pixbar-android-live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and verify signed Android APK
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_PROPERTIES_BASE64: ${{ secrets.PIXBAR_LOCAL_PROPERTIES_BASE64 }}
+      RELEASE_KEYSTORE_BASE64: ${{ secrets.PIXBAR_RELEASE_KEYSTORE_BASE64 }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Configure release signing
+        run: |
+          set -euo pipefail
+          test -n "${RELEASE_PROPERTIES_BASE64}" || { echo "PIXBAR_LOCAL_PROPERTIES_BASE64 is missing." >&2; exit 1; }
+          test -n "${RELEASE_KEYSTORE_BASE64}" || { echo "PIXBAR_RELEASE_KEYSTORE_BASE64 is missing." >&2; exit 1; }
+          keystore_path="${RUNNER_TEMP}/pixbar-release.jks"
+          printf '%s' "${RELEASE_KEYSTORE_BASE64}" | base64 --decode > "${keystore_path}"
+          test -s "${keystore_path}"
+          printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
+          sed -i -E '/^[[:space:]]*(sdk\.dir|PIXBAR_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
+          printf '\nPIXBAR_RELEASE_STORE_FILE=%s\n' "${keystore_path}" >> local.properties
+          grep -q '^PIXBAR_RELEASE_STORE_PASSWORD=' local.properties
+          grep -q '^PIXBAR_RELEASE_KEY_ALIAS=' local.properties
+          grep -q '^PIXBAR_RELEASE_KEY_PASSWORD=' local.properties
+
+      - name: Clean build state
+        run: ./gradlew --stop || true
+
+      - name: Build full signed release
+        run: ./gradlew :androidApp:clean :androidApp:assembleFullRelease --stacktrace --no-build-cache
+
+      - name: Rename signed APKs to Pixbar package name
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(androidApp/build/outputs/apk/full/release/*.apk)
+          (( ${#apks[@]} > 0 )) || { echo "No APKs were produced." >&2; exit 1; }
+          for apk in "${apks[@]}"; do
+            filename="$(basename "${apk}")"
+            if [[ "${filename}" != com.movie.pixbar* ]]; then
+              abi="${filename#full-release-}"
+              abi="${abi%.apk}"
+              mv "${apk}" "androidApp/build/outputs/apk/full/release/com.movie.pixbar-${abi}.apk"
+            fi
+          done
+
+      - name: Verify signed APKs
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(androidApp/build/outputs/apk/full/release/com.movie.pixbar*.apk)
+          (( ${#apks[@]} > 0 )) || { echo "No renamed signed APKs found." >&2; exit 1; }
+          for apk in "${apks[@]}"; do
+            echo "Verified APK: ${apk}"
+            ls -lh "${apk}"
+          done
+
+      - name: Upload live-build APKs
+        uses: actions/upload-artifact@v7
+        with:
+          name: pixbar-live-${{ github.sha }}
+          path: androidApp/build/outputs/apk/full/release/com.movie.pixbar*.apk
+          if-no-files-found: error
