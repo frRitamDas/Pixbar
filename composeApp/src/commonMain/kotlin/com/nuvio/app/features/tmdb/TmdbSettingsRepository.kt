@@ -10,11 +10,10 @@ import kotlinx.coroutines.flow.asStateFlow
 object TmdbSettingsRepository {
     private val _uiState = MutableStateFlow(TmdbSettings())
     val uiState: StateFlow<TmdbSettings> = _uiState.asStateFlow()
-
     private var hasLoaded = false
 
-    private var enabled = false
-    private var apiKey = ""
+    private var enabled = true
+    private var apiKey = BACKEND_SENTINEL
     private var language = "en"
     private var useTrailers = true
     private var useArtwork = true
@@ -29,24 +28,14 @@ object TmdbSettingsRepository {
     private var useMoreLikeThis = true
     private var useCollections = true
 
-    fun ensureLoaded() {
-        if (hasLoaded) return
-        loadFromDisk()
-    }
+    private const val BACKEND_SENTINEL = "pixbar-backend-tmdb"
 
-    fun onProfileChanged() {
-        loadFromDisk()
-    }
-
-    fun snapshot(): TmdbSettings {
-        ensureLoaded()
-        return _uiState.value
-    }
+    fun ensureLoaded() { if (!hasLoaded) loadFromDisk() }
+    fun onProfileChanged() { loadFromDisk() }
+    fun snapshot(): TmdbSettings { ensureLoaded(); return _uiState.value }
 
     fun setEnabled(value: Boolean) {
         ensureLoaded()
-        if (value && apiKey.isBlank()) return
-        if (enabled == value) return
         enabled = value
         publish()
         TmdbSettingsStorage.saveEnabled(value)
@@ -54,15 +43,9 @@ object TmdbSettingsRepository {
 
     fun setApiKey(value: String) {
         ensureLoaded()
-        val normalized = value.trim()
-        if (apiKey == normalized) return
-        apiKey = normalized
-        if (apiKey.isBlank()) {
-            enabled = false
-            TmdbSettingsStorage.saveEnabled(false)
-        }
+        // The TMDB credential is server-side. Ignore client-supplied credentials.
+        apiKey = BACKEND_SENTINEL
         publish()
-        TmdbSettingsStorage.saveApiKey(normalized)
     }
 
     fun setLanguage(value: String) {
@@ -74,33 +57,10 @@ object TmdbSettingsRepository {
         TmdbSettingsStorage.saveLanguage(normalized)
     }
 
-    fun setUseTrailers(value: Boolean) = setBoolean(
-        current = useTrailers,
-        next = value,
-        update = { useTrailers = it },
-        persist = TmdbSettingsStorage::saveUseTrailers,
-    )
-
-    fun setUseArtwork(value: Boolean) = setBoolean(
-        current = useArtwork,
-        next = value,
-        update = { useArtwork = it },
-        persist = TmdbSettingsStorage::saveUseArtwork,
-    )
-
-    fun setUseBasicInfo(value: Boolean) = setBoolean(
-        current = useBasicInfo,
-        next = value,
-        update = { useBasicInfo = it },
-        persist = TmdbSettingsStorage::saveUseBasicInfo,
-    )
-
-    fun setUseDetails(value: Boolean) = setBoolean(
-        current = useDetails,
-        next = value,
-        update = { useDetails = it },
-        persist = TmdbSettingsStorage::saveUseDetails,
-    )
+    fun setUseTrailers(value: Boolean) = setBoolean(useTrailers, value, { useTrailers = it }, TmdbSettingsStorage::saveUseTrailers)
+    fun setUseArtwork(value: Boolean) = setBoolean(useArtwork, value, { useArtwork = it }, TmdbSettingsStorage::saveUseArtwork)
+    fun setUseBasicInfo(value: Boolean) = setBoolean(useBasicInfo, value, { useBasicInfo = it }, TmdbSettingsStorage::saveUseBasicInfo)
+    fun setUseDetails(value: Boolean) = setBoolean(useDetails, value, { useDetails = it }, TmdbSettingsStorage::saveUseDetails)
 
     fun setUseReleaseDates(value: Boolean) {
         ensureLoaded()
@@ -111,61 +71,15 @@ object TmdbSettingsRepository {
         invalidateReleaseDateMetadata()
     }
 
-    fun setUseCredits(value: Boolean) = setBoolean(
-        current = useCredits,
-        next = value,
-        update = { useCredits = it },
-        persist = TmdbSettingsStorage::saveUseCredits,
-    )
+    fun setUseCredits(value: Boolean) = setBoolean(useCredits, value, { useCredits = it }, TmdbSettingsStorage::saveUseCredits)
+    fun setUseProductions(value: Boolean) = setBoolean(useProductions, value, { useProductions = it }, TmdbSettingsStorage::saveUseProductions)
+    fun setUseNetworks(value: Boolean) = setBoolean(useNetworks, value, { useNetworks = it }, TmdbSettingsStorage::saveUseNetworks)
+    fun setUseEpisodes(value: Boolean) = setBoolean(useEpisodes, value, { useEpisodes = it }, TmdbSettingsStorage::saveUseEpisodes)
+    fun setUseSeasonPosters(value: Boolean) = setBoolean(useSeasonPosters, value, { useSeasonPosters = it }, TmdbSettingsStorage::saveUseSeasonPosters)
+    fun setUseMoreLikeThis(value: Boolean) = setBoolean(useMoreLikeThis, value, { useMoreLikeThis = it }, TmdbSettingsStorage::saveUseMoreLikeThis)
+    fun setUseCollections(value: Boolean) = setBoolean(useCollections, value, { useCollections = it }, TmdbSettingsStorage::saveUseCollections)
 
-    fun setUseProductions(value: Boolean) = setBoolean(
-        current = useProductions,
-        next = value,
-        update = { useProductions = it },
-        persist = TmdbSettingsStorage::saveUseProductions,
-    )
-
-    fun setUseNetworks(value: Boolean) = setBoolean(
-        current = useNetworks,
-        next = value,
-        update = { useNetworks = it },
-        persist = TmdbSettingsStorage::saveUseNetworks,
-    )
-
-    fun setUseEpisodes(value: Boolean) = setBoolean(
-        current = useEpisodes,
-        next = value,
-        update = { useEpisodes = it },
-        persist = TmdbSettingsStorage::saveUseEpisodes,
-    )
-
-    fun setUseSeasonPosters(value: Boolean) = setBoolean(
-        current = useSeasonPosters,
-        next = value,
-        update = { useSeasonPosters = it },
-        persist = TmdbSettingsStorage::saveUseSeasonPosters,
-    )
-
-    fun setUseMoreLikeThis(value: Boolean) = setBoolean(
-        current = useMoreLikeThis,
-        next = value,
-        update = { useMoreLikeThis = it },
-        persist = TmdbSettingsStorage::saveUseMoreLikeThis,
-    )
-
-    fun setUseCollections(value: Boolean) = setBoolean(
-        current = useCollections,
-        next = value,
-        update = { useCollections = it },
-        persist = TmdbSettingsStorage::saveUseCollections,
-    )
-
-    private fun setBoolean(
-        current: Boolean,
-        next: Boolean,
-        update: (Boolean) -> Unit,
-        persist: (Boolean) -> Unit,
-    ) {
+    private fun setBoolean(current: Boolean, next: Boolean, update: (Boolean) -> Unit, persist: (Boolean) -> Unit) {
         ensureLoaded()
         if (current == next) return
         update(next)
@@ -177,8 +91,9 @@ object TmdbSettingsRepository {
         val wasLoaded = hasLoaded
         val previousUseReleaseDates = useReleaseDates
         hasLoaded = true
-        apiKey = TmdbSettingsStorage.loadApiKey()?.trim().orEmpty()
-        enabled = (TmdbSettingsStorage.loadEnabled() ?: false) && apiKey.isNotBlank()
+        // Never load or persist a TMDB API credential on the client.
+        apiKey = BACKEND_SENTINEL
+        enabled = true
         val storedLanguage = TmdbSettingsStorage.loadLanguage()
         language = if (storedLanguage == null) "en" else normalizeLanguage(storedLanguage)
         useTrailers = TmdbSettingsStorage.loadUseTrailers() ?: true
@@ -194,9 +109,7 @@ object TmdbSettingsRepository {
         useMoreLikeThis = TmdbSettingsStorage.loadUseMoreLikeThis() ?: true
         useCollections = TmdbSettingsStorage.loadUseCollections() ?: true
         publish()
-        if (wasLoaded && previousUseReleaseDates != useReleaseDates) {
-            invalidateReleaseDateMetadata()
-        }
+        if (wasLoaded && previousUseReleaseDates != useReleaseDates) invalidateReleaseDateMetadata()
     }
 
     private fun publish() {
