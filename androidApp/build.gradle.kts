@@ -1,97 +1,149 @@
-import org.gradle.api.tasks.testing.Test
 import java.util.Properties
+
+fun readXcconfigValue(file: File, key: String): String? {
+    if (!file.exists()) return null
+    return file.readLines()
+        .asSequence()
+        .map(String::trim)
+        .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains('=') }
+        .map { line ->
+            val separatorIndex = line.indexOf('=')
+            line.substring(0, separatorIndex).trim() to line.substring(separatorIndex + 1).trim()
+        }
+        .firstOrNull { (entryKey, _) -> entryKey == key }
+        ?.second
+}
 
 plugins {
     alias(libs.plugins.androidApplication)
-    alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.sentry.android.gradle)
 }
 
-val localProperties = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) {
-        file.inputStream().use(::load)
-    }
+val localProps = Properties().apply {
+    val propsFile = rootProject.file("local.properties")
+    if (propsFile.exists()) propsFile.inputStream().use { load(it) }
+}
+val releaseStoreFile = localProps.getProperty("PIXBAR_RELEASE_STORE_FILE")?.takeIf { it.isNotBlank() }
+val releaseStorePassword = localProps.getProperty("PIXBAR_RELEASE_STORE_PASSWORD")?.takeIf { it.isNotBlank() }
+val releaseKeyAlias = localProps.getProperty("PIXBAR_RELEASE_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+val releaseKeyPassword = localProps.getProperty("PIXBAR_RELEASE_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+val releaseKeystore = releaseStoreFile?.let(rootProject::file)
+fun envOrLocalProperty(key: String): String? =
+    providers.environmentVariable(key).orNull?.trim()?.takeIf { it.isNotBlank() }
+        ?: localProps.getProperty(key)?.trim()?.takeIf { it.isNotBlank() }
+
+val sentryAuthToken = envOrLocalProperty("SENTRY_AUTH_TOKEN")
+val sentryOrg = envOrLocalProperty("SENTRY_ORG")
+val sentryProject = envOrLocalProperty("SENTRY_PROJECT")
+val sentryMappingUploadEnabled = sentryAuthToken != null && sentryOrg != null && sentryProject != null
+val appVersionConfigFile = rootProject.file("iosApp/Configuration/Version.xcconfig")
+val releaseAppVersionName = readXcconfigValue(appVersionConfigFile, "MARKETING_VERSION")
+    ?: error("MARKETING_VERSION is missing from ${appVersionConfigFile.path}")
+val releaseAppVersionCode = readXcconfigValue(appVersionConfigFile, "CURRENT_PROJECT_VERSION")
+    ?.toIntOrNull()
+    ?: error("CURRENT_PROJECT_VERSION is missing or invalid in ${appVersionConfigFile.path}")
+val requestedTaskNames = gradle.startParameter.taskNames.map { it.substringAfterLast(':') }
+val buildsReleaseApks = requestedTaskNames.any {
+    it.startsWith("assemble", ignoreCase = true) && it.endsWith("Release", ignoreCase = true)
 }
 
-fun localProperty(name: String): String? = localProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
-
-val releaseAppVersionName = localProperty("PIXBAR_VERSION_NAME") ?: "1.1"
-val releaseAppVersionCode = localProperty("PIXBAR_VERSION_CODE")?.toIntOrNull() ?: 123
-val sentryMappingUploadEnabled = localProperty("SENTRY_UPLOAD_MAPPINGS")?.toBooleanStrictOrNull() ?: false
-val sentryAuthToken = localProperty("SENTRY_AUTH_TOKEN")
-val sentryOrg = localProperty("SENTRY_ORG")
-val sentryProject = localProperty("SENTRY_PROJECT")
-
 android {
-    namespace = "com.nuvio.app"
+    namespace = "com.nuvio.android"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
+    compileSdkMinor = libs.versions.android.compileSdkMinor.get().toInt()
+
+    signingConfigs {
+        create("release") {
+            if (releaseKeystore != null && releaseStorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null) {
+                storeFile = releaseKeystore
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
 
     defaultConfig {
-        applicationId = "com.nuvio.app.Nuvio"
+        applicationId = "com.nuvio.app"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = releaseAppVersionCode
         versionName = releaseAppVersionName
-    }
-
-    signingConfigs {
-        create("release") {
-            val storeFilePath = localProperty("PIXBAR_RELEASE_STORE_FILE")
-            val storePassword = localProperty("PIXBAR_RELEASE_STORE_PASSWORD")
-            val keyAlias = localProperty("PIXBAR_RELEASE_KEY_ALIAS")
-            val keyPassword = localProperty("PIXBAR_RELEASE_KEY_PASSWORD")
-            if (storeFilePath != null) storeFile = file(storeFilePath)
-            if (storePassword != null) this.storePassword = storePassword
-            if (keyAlias != null) this.keyAlias = keyAlias
-            if (keyPassword != null) this.keyPassword = keyPassword
-        }
-    }
-
-    buildTypes {
-        getByName("debug") {
-            applicationIdSuffix = ".debug"
-            isDebuggable = true
-        }
-        getByName("release") {
-            isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
-        }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     flavorDimensions += "distribution"
     productFlavors {
         create("full") {
             dimension = "distribution"
-            applicationId = "com.nuvio.app.Nuvio"
         }
+        create("playstore") {
+            dimension = "distribution"
+        }
+    }
+
+    sourceSets.getByName("full") {
+        manifest.srcFile("src/full/AndroidManifest.xml")
+        jniLibs.directories.add("../composeApp/src/full/jniLibs")
     }
 
     packaging {
-        resources.excludes += setOf(
-            "META-INF/AL2.0",
-            "META-INF/LGPL2.1",
-            "META-INF/DEPENDENCIES",
-        )
-    }
-
-    lint {
-        abortOnError = false
-    }
-
-    testOptions {
-        unitTests.isIncludeAndroidResources = true
-    }
-
-    sourceSets.getByName("main") {
-        manifest.srcFile("src/main/AndroidManifest.xml")
-    }
-
-    applicationVariants.all {
-        val variant = this
-        if (variant.buildType.name == "debug") {
-            variant.applicationId = "com.nuviodebug.com"
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        jniLibs {
+            useLegacyPackaging = true
+            pickFirsts += listOf(
+                "lib/*/libc++_shared.so",
+                "lib/*/libavcodec.so",
+                "lib/*/libavutil.so",
+                "lib/*/libswscale.so",
+                "lib/*/libswresample.so"
+            )
+        }
+    }
+
+    androidResources {
+        noCompress += "cvr"
+    }
+
+    splits {
+        abi {
+            isEnable = buildsReleaseApks
+            reset()
+            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            isUniversalApk = false
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            val minifyRelease = providers.gradleProperty("releaseMinifyEnabled")
+                .map(String::toBooleanStrict)
+                .getOrElse(true)
+            isMinifyEnabled = minifyRelease
+            isShrinkResources = minifyRelease
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "../composeApp/proguard-rules.pro",
+            )
+            signingConfig = signingConfigs.getByName("release")
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
+        }
+    }
+
+    compileOptions {
+        isCoreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("debug")) { variant ->
+        variant.applicationId.set("com.nuviodebug.com")
     }
 }
 
@@ -118,9 +170,10 @@ sentry {
 
 dependencies {
     implementation(project(":composeApp"))
-    // The Android wrapper compiles generated/application Kotlin that references the
-    // Compose runtime. Keep the runtime on this module's compile classpath; the
-    // Compose compiler plugin itself belongs to composeApp, not this Android wrapper.
+    // The Android application module's Kotlin compilation invokes the Compose compiler
+    // while compiling generated/application Kotlin. Keep the Compose runtime explicitly
+    // on this module's compile classpath so release builds do not fail with
+    // IncompatibleComposeRuntimeVersionException.
     implementation(libs.compose.runtime)
     implementation(libs.androidx.appcompat)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
@@ -131,9 +184,4 @@ dependencies {
     androidTestImplementation(libs.androidx.activity.compose)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:${libs.versions.composeMultiplatform.get()}")
     debugImplementation("androidx.compose.ui:ui-test-manifest:${libs.versions.composeMultiplatform.get()}")
-}
-
-// Keep this module's JVM/Android test configuration explicit for Gradle 9.x.
-tasks.withType<Test>().configureEach {
-    useJUnitPlatform()
 }
