@@ -58,13 +58,53 @@ jobs:
             exit 1
           }
 
-          if keytool -exportcert -keystore "${keystore_path}" -storepass "${store_password}" -keypass "${key_password}" -alias "${key_alias}" -rfc >/dev/null 2>&1; then
-            echo "Release keystore and key password validated."
-          elif keytool -exportcert -keystore "${keystore_path}" -storepass "${store_password}" -keypass "${store_password}" -alias "${key_alias}" -rfc >/dev/null 2>&1; then
-            echo "Release key is protected with the store password; normalizing the local release property."
-            sed -i "s/^PIXBAR_RELEASE_KEY_PASSWORD=.*/PIXBAR_RELEASE_KEY_PASSWORD=${store_password}/" local.properties
+          cat > "${RUNNER_TEMP}/ValidatePrivateKey.java" <<'JAVA'
+          import java.io.FileInputStream;
+          import java.security.Key;
+          import java.security.KeyStore;
+          
+          public final class ValidatePrivateKey {
+              public static void main(String[] args) throws Exception {
+                  if (args.length != 3) throw new IllegalArgumentException("usage: <keystore> <alias> <password>");
+                  KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
+                  try (FileInputStream in = new FileInputStream(args[0])) {
+                      ks.load(in, args[2].toCharArray());
+                  }
+                  Key key = ks.getKey(args[1], args[2].toCharArray());
+                  if (key == null) throw new IllegalStateException("No key found for alias " + args[1]);
+                  if (!(key instanceof java.security.PrivateKey)) throw new IllegalStateException("Alias " + args[1] + " is not a private key");
+                  System.out.println("Private signing key unlocked successfully.");
+              }
+          }
+          JAVA
+          javac "${RUNNER_TEMP}/ValidatePrivateKey.java"
+
+          if java -cp "${RUNNER_TEMP}" ValidatePrivateKey "${keystore_path}" "${key_alias}" "${key_password}" >/dev/null 2>&1; then
+            echo "Release keystore and private signing key validated."
+          elif java -cp "${RUNNER_TEMP}" ValidatePrivateKey "${keystore_path}" "${key_alias}" "${store_password}" >/dev/null 2>&1; then
+            echo "Private key is protected with the store password; normalizing the local release property."
+            python3 - "${store_password}" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path("local.properties")
+          text = p.read_text()
+          lines = text.splitlines()
+          password = sys.argv[1]
+          out = []
+          replaced = False
+          for line in lines:
+              if line.startswith("PIXBAR_RELEASE_KEY_PASSWORD="):
+                  out.append("PIXBAR_RELEASE_KEY_PASSWORD=" + password)
+                  replaced = True
+              else:
+                  out.append(line)
+          if not replaced:
+              raise SystemExit("PIXBAR_RELEASE_KEY_PASSWORD property disappeared during normalization")
+          p.write_text("\n".join(out) + "\n")
+          PY
           else
-            echo "PIXBAR_RELEASE_KEY_PASSWORD does not unlock alias ${key_alias} in the supplied release keystore. The keystore itself is valid, but the key password secret is mismatched." >&2
+            echo "The supplied PIXBAR_RELEASE_KEY_PASSWORD cannot unlock the private key for alias ${key_alias}." >&2
+            echo "The keystore/password configuration must be corrected before Gradle is allowed to start." >&2
             exit 1
           fi
 
