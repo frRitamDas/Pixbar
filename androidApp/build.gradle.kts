@@ -16,7 +16,6 @@ fun readXcconfigValue(file: File, key: String): String? {
 
 plugins {
     alias(libs.plugins.androidApplication)
-    alias(libs.plugins.composeCompiler)
     alias(libs.plugins.sentry.android.gradle)
 }
 
