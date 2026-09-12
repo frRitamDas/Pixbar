@@ -172,3 +172,14 @@ jobs:
           args=("${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --target "${RELEASE_BRANCH}" --title "Pixbar ${RELEASE_VERSION}" --notes-file release-assets/release-notes.md)
           [[ "${RELEASE_MODE}" == "draft" ]] && args+=(--draft)
           gh release create "${args[@]}" "${release_files[@]}"
+
+  store:
+    name: Update Pixbar sideload source
+    if: inputs.mode == 'publish'
+    needs: [prepare, release]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/update-store-source.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      version: ${{ needs.prepare.outputs.version }}
