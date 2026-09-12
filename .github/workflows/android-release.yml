@@ -109,7 +109,7 @@ jobs:
           test -f "$(sed -n 's/^PIXBAR_RELEASE_STORE_FILE=//p' local.properties)"
       - name: Build full release APKs
         run: ./gradlew :androidApp:assembleFullRelease --stacktrace
-      - name: Verify APK outputs
+      - name: Rename signed APK outputs
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -118,12 +118,29 @@ jobs:
             echo "Android release build completed without producing APK files." >&2
             exit 1
           fi
-          printf 'Produced APK: %s\n' "${apks[@]}"
+          for apk in "${apks[@]}"; do
+            filename="$(basename "${apk}")"
+            if [[ "${filename}" != com.movie.pixbar* ]]; then
+              abi="${filename#full-release-}"
+              abi="${abi%.apk}"
+              mv "${apk}" "androidApp/build/outputs/apk/full/release/com.movie.pixbar-${abi}.apk"
+            fi
+          done
+      - name: Verify APK outputs
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(androidApp/build/outputs/apk/full/release/com.movie.pixbar*.apk)
+          if (( ${#apks[@]} == 0 )); then
+            echo "No renamed signed Pixbar APK files were produced." >&2
+            exit 1
+          fi
+          printf 'Signed Pixbar APK: %s\n' "${apks[@]}"
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v7
         with:
           name: pixbar-${{ needs.prepare.outputs.version }}-android-full-release
-          path: androidApp/build/outputs/apk/full/release/*.apk
+          path: androidApp/build/outputs/apk/full/release/com.movie.pixbar*.apk
           if-no-files-found: error
 
   release:
@@ -153,12 +170,12 @@ jobs:
       - name: Verify release packages
         run: |
           set -euo pipefail
-          mapfile -t release_files < <(find release-assets -maxdepth 1 -type f -name '*.apk' -print | sort)
+          mapfile -t release_files < <(find release-assets -maxdepth 1 -type f -name 'com.movie.pixbar*.apk' -print | sort)
           (( ${#release_files[@]} > 0 )) || { echo "No Android APK packages were produced." >&2; exit 1; }
           printf 'Release APK: %s\n' "${release_files[@]}"
       - name: Create GitHub release
         run: |
-          mapfile -t release_files < <(find release-assets -maxdepth 1 -type f -name '*.apk' -print | sort)
+          mapfile -t release_files < <(find release-assets -maxdepth 1 -type f -name 'com.movie.pixbar*.apk' -print | sort)
           args=("${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --target "${RELEASE_BRANCH}" --title "Pixbar ${RELEASE_VERSION}" --notes-file release-assets/release-notes.md)
           [[ "${RELEASE_MODE}" == "draft" ]] && args+=(--draft)
           gh release create "${args[@]}" "${release_files[@]}"
