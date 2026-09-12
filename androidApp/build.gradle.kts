@@ -2,16 +2,9 @@ import java.util.Properties
 
 fun readXcconfigValue(file: File, key: String): String? {
     if (!file.exists()) return null
-    return file.readLines()
-        .asSequence()
-        .map(String::trim)
-        .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains('=') }
-        .map { line ->
-            val separatorIndex = line.indexOf('=')
-            line.substring(0, separatorIndex).trim() to line.substring(separatorIndex + 1).trim()
-        }
-        .firstOrNull { (entryKey, _) -> entryKey == key }
-        ?.second
+    return file.readLines().asSequence().map(String::trim).filter { it.isNotEmpty() && !it.startsWith("#") && it.contains('=') }
+        .map { line -> val separatorIndex = line.indexOf('='); line.substring(0, separatorIndex).trim() to line.substring(separatorIndex + 1).trim() }
+        .firstOrNull { (entryKey, _) -> entryKey == key }?.second
 }
 
 plugins {
@@ -28,24 +21,16 @@ val releaseStorePassword = localProps.getProperty("PIXBAR_RELEASE_STORE_PASSWORD
 val releaseKeyAlias = localProps.getProperty("PIXBAR_RELEASE_KEY_ALIAS")?.takeIf { it.isNotBlank() }
 val releaseKeyPassword = localProps.getProperty("PIXBAR_RELEASE_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
 val releaseKeystore = releaseStoreFile?.let(rootProject::file)
-fun envOrLocalProperty(key: String): String? =
-    providers.environmentVariable(key).orNull?.trim()?.takeIf { it.isNotBlank() }
-        ?: localProps.getProperty(key)?.trim()?.takeIf { it.isNotBlank() }
-
+fun envOrLocalProperty(key: String): String? = providers.environmentVariable(key).orNull?.trim()?.takeIf { it.isNotBlank() } ?: localProps.getProperty(key)?.trim()?.takeIf { it.isNotBlank() }
 val sentryAuthToken = envOrLocalProperty("SENTRY_AUTH_TOKEN")
 val sentryOrg = envOrLocalProperty("SENTRY_ORG")
 val sentryProject = envOrLocalProperty("SENTRY_PROJECT")
 val sentryMappingUploadEnabled = sentryAuthToken != null && sentryOrg != null && sentryProject != null
 val appVersionConfigFile = rootProject.file("iosApp/Configuration/Version.xcconfig")
-val releaseAppVersionName = readXcconfigValue(appVersionConfigFile, "MARKETING_VERSION")
-    ?: error("MARKETING_VERSION is missing from ${appVersionConfigFile.path}")
-val releaseAppVersionCode = readXcconfigValue(appVersionConfigFile, "CURRENT_PROJECT_VERSION")
-    ?.toIntOrNull()
-    ?: error("CURRENT_PROJECT_VERSION is missing or invalid in ${appVersionConfigFile.path}")
+val releaseAppVersionName = readXcconfigValue(appVersionConfigFile, "MARKETING_VERSION") ?: error("MARKETING_VERSION is missing from ${appVersionConfigFile.path}")
+val releaseAppVersionCode = readXcconfigValue(appVersionConfigFile, "CURRENT_PROJECT_VERSION")?.toIntOrNull() ?: error("CURRENT_PROJECT_VERSION is missing or invalid in ${appVersionConfigFile.path}")
 val requestedTaskNames = gradle.startParameter.taskNames.map { it.substringAfterLast(':') }
-val buildsReleaseApks = requestedTaskNames.any {
-    it.startsWith("assemble", ignoreCase = true) && it.endsWith("Release", ignoreCase = true)
-}
+val buildsReleaseApks = requestedTaskNames.any { it.startsWith("assemble", ignoreCase = true) && it.endsWith("Release", ignoreCase = true) }
 
 android {
     namespace = "com.nuvio.android"
@@ -74,12 +59,8 @@ android {
 
     flavorDimensions += "distribution"
     productFlavors {
-        create("full") {
-            dimension = "distribution"
-        }
-        create("playstore") {
-            dimension = "distribution"
-        }
+        create("full") { dimension = "distribution" }
+        create("playstore") { dimension = "distribution" }
     }
 
     sourceSets.getByName("full") {
@@ -88,49 +69,32 @@ android {
     }
 
     packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
+        resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
         jniLibs {
             useLegacyPackaging = true
-            pickFirsts += listOf(
-                "lib/*/libc++_shared.so",
-                "lib/*/libavcodec.so",
-                "lib/*/libavutil.so",
-                "lib/*/libswscale.so",
-                "lib/*/libswresample.so"
-            )
+            pickFirsts += listOf("lib/*/libc++_shared.so", "lib/*/libavcodec.so", "lib/*/libavutil.so", "lib/*/libswscale.so", "lib/*/libswresample.so")
         }
     }
 
-    androidResources {
-        noCompress += "cvr"
-    }
+    androidResources { noCompress += "cvr" }
 
     splits {
         abi {
             isEnable = buildsReleaseApks
             reset()
             include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-            isUniversalApk = false
+            isUniversalApk = true
         }
     }
 
     buildTypes {
         getByName("release") {
-            val minifyRelease = providers.gradleProperty("releaseMinifyEnabled")
-                .map(String::toBooleanStrict)
-                .getOrElse(true)
+            val minifyRelease = providers.gradleProperty("releaseMinifyEnabled").map(String::toBooleanStrict).getOrElse(true)
             isMinifyEnabled = minifyRelease
             isShrinkResources = minifyRelease
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "../composeApp/proguard-rules.pro",
-            )
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "../composeApp/proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
-            ndk {
-                debugSymbolLevel = "FULL"
-            }
+            ndk { debugSymbolLevel = "FULL" }
         }
     }
 
@@ -142,9 +106,7 @@ android {
 }
 
 androidComponents {
-    onVariants(selector().withBuildType("debug")) { variant ->
-        variant.applicationId.set("com.nuviodebug.com")
-    }
+    onVariants(selector().withBuildType("debug")) { variant -> variant.applicationId.set("com.nuviodebug.com") }
 }
 
 sentry {
@@ -160,20 +122,12 @@ sentry {
     sentryOrg?.let(org::set)
     sentryProject?.let(projectName::set)
     ignoredBuildTypes.set(setOf("debug"))
-    autoInstallation {
-        enabled.set(false)
-    }
-    tracingInstrumentation {
-        enabled.set(false)
-    }
+    autoInstallation { enabled.set(false) }
+    tracingInstrumentation { enabled.set(false) }
 }
 
 dependencies {
     implementation(project(":composeApp"))
-    // The Android application module's Kotlin compilation invokes the Compose compiler
-    // while compiling generated/application Kotlin. Keep the Compose runtime explicitly
-    // on this module's compile classpath so release builds do not fail with
-    // IncompatibleComposeRuntimeVersionException.
     implementation(libs.compose.runtime)
     implementation(libs.androidx.appcompat)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
