@@ -7,16 +7,9 @@ version_file="${repository_root}/iosApp/Configuration/Version.xcconfig"
 version="${1:-$(sed -nE 's/^[[:space:]]*MARKETING_VERSION[[:space:]]*=[[:space:]]*([^[:space:]#]+).*$/\1/p' "${version_file}" | head -n 1)}"
 configuration="${IOS_CONFIGURATION:-Release}"
 case "${configuration}" in
-    Debug)
-        configuration_slug="debug"
-        ;;
-    Release)
-        configuration_slug="release"
-        ;;
-    *)
-        echo "Unsupported iOS configuration: ${configuration}" >&2
-        exit 1
-        ;;
+    Debug) configuration_slug="debug" ;;
+    Release) configuration_slug="release" ;;
+    *) echo "Unsupported iOS configuration: ${configuration}" >&2; exit 1 ;;
 esac
 derived_data="${IOS_DERIVED_DATA_PATH:-${repository_root}/build/ios-derived-full-${configuration_slug}}"
 output_directory="${IOS_IPA_OUTPUT_DIR:-${repository_root}/build/ios-ipa}"
@@ -31,15 +24,15 @@ fi
 cd "${repository_root}"
 build_environment=(
     env
-    NUVIO_IOS_DISTRIBUTION=full
+    PIXBAR_IOS_DISTRIBUTION=full
     CLANG_MODULE_CACHE_PATH="${clang_module_cache}"
     SWIFTPM_MODULECACHE_OVERRIDE="${swiftpm_module_cache}"
 )
-if [[ -n "${NUVIO_GRADLE_JVMARGS:-}" ]]; then
-    build_environment+=("ORG_GRADLE_PROJECT_org.gradle.jvmargs=${NUVIO_GRADLE_JVMARGS}")
+if [[ -n "${PIXBAR_GRADLE_JVMARGS:-}" ]]; then
+    build_environment+=("ORG_GRADLE_PROJECT_org.gradle.jvmargs=${PIXBAR_GRADLE_JVMARGS}")
 fi
-if [[ -n "${NUVIO_KOTLIN_NATIVE_JVMARGS:-}" ]]; then
-    build_environment+=("ORG_GRADLE_PROJECT_kotlin.native.jvmArgs=${NUVIO_KOTLIN_NATIVE_JVMARGS}")
+if [[ -n "${PIXBAR_KOTLIN_NATIVE_JVMARGS:-}" ]]; then
+    build_environment+=("ORG_GRADLE_PROJECT_kotlin.native.jvmArgs=${PIXBAR_KOTLIN_NATIVE_JVMARGS}")
 fi
 "${build_environment[@]}" \
     xcodebuild \
@@ -54,7 +47,7 @@ fi
     CODE_SIGN_IDENTITY= \
     build
 
-app_path="${derived_data}/Build/Products/${configuration}-iphoneos/Nuvio.app"
+app_path="${derived_data}/Build/Products/${configuration}-iphoneos/Pixbar.app"
 if [[ ! -d "${app_path}" ]]; then
     echo "iOS build did not produce ${app_path}." >&2
     exit 1
@@ -99,13 +92,13 @@ fi
 
 mkdir -p "${output_directory}"
 output_directory="$(cd "${output_directory}" && pwd -P)"
-package_root="$(mktemp -d "${TMPDIR:-/tmp}/nuvio-ios-ipa.XXXXXX")"
+package_root="$(mktemp -d "${TMPDIR:-/tmp}/pixbar-ios-ipa.XXXXXX")"
 trap 'rm -rf "${package_root}"' EXIT
 mkdir -p "${package_root}/Payload"
-ditto "${app_path}" "${package_root}/Payload/Nuvio.app"
+ditto "${app_path}" "${package_root}/Payload/Pixbar.app"
 
-ipa_path="${output_directory}/nuvio-${version}-full-${configuration_slug}.ipa"
-temporary_ipa="${package_root}/nuvio-${version}-full-${configuration_slug}.ipa"
+ipa_path="${output_directory}/pixbar-${version}-full-${configuration_slug}.ipa"
+temporary_ipa="${package_root}/pixbar-${version}-full-${configuration_slug}.ipa"
 (
     cd "${package_root}"
     /usr/bin/zip -qry "${temporary_ipa}" Payload
