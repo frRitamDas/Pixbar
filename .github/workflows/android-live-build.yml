@@ -33,7 +33,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Configure release signing
+      - name: Configure and validate release signing
         run: |
           set -euo pipefail
           test -n "${RELEASE_PROPERTIES_BASE64}" || { echo "PIXBAR_LOCAL_PROPERTIES_BASE64 is missing." >&2; exit 1; }
@@ -44,9 +44,29 @@ jobs:
           printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
           sed -i -E '/^[[:space:]]*(sdk\.dir|PIXBAR_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
           printf '\nPIXBAR_RELEASE_STORE_FILE=%s\n' "${keystore_path}" >> local.properties
-          grep -q '^PIXBAR_RELEASE_STORE_PASSWORD=' local.properties
-          grep -q '^PIXBAR_RELEASE_KEY_ALIAS=' local.properties
-          grep -q '^PIXBAR_RELEASE_KEY_PASSWORD=' local.properties
+
+          store_password="$(sed -n 's/^PIXBAR_RELEASE_STORE_PASSWORD=//p' local.properties)"
+          key_alias="$(sed -n 's/^PIXBAR_RELEASE_KEY_ALIAS=//p' local.properties)"
+          key_password="$(sed -n 's/^PIXBAR_RELEASE_KEY_PASSWORD=//p' local.properties)"
+          [[ -n "${store_password}" && -n "${key_alias}" && -n "${key_password}" ]] || {
+            echo "Android release signing properties are incomplete." >&2
+            exit 1
+          }
+
+          keytool -list -keystore "${keystore_path}" -storepass "${store_password}" -alias "${key_alias}" >/dev/null || {
+            echo "PIXBAR_RELEASE_STORE_PASSWORD or PIXBAR_RELEASE_KEY_ALIAS does not match the supplied release keystore." >&2
+            exit 1
+          }
+
+          if keytool -exportcert -keystore "${keystore_path}" -storepass "${store_password}" -keypass "${key_password}" -alias "${key_alias}" -rfc >/dev/null 2>&1; then
+            echo "Release keystore and key password validated."
+          elif keytool -exportcert -keystore "${keystore_path}" -storepass "${store_password}" -keypass "${store_password}" -alias "${key_alias}" -rfc >/dev/null 2>&1; then
+            echo "Release key is protected with the store password; normalizing the local release property."
+            sed -i "s/^PIXBAR_RELEASE_KEY_PASSWORD=.*/PIXBAR_RELEASE_KEY_PASSWORD=${store_password}/" local.properties
+          else
+            echo "PIXBAR_RELEASE_KEY_PASSWORD does not unlock alias ${key_alias} in the supplied release keystore. The keystore itself is valid, but the key password secret is mismatched." >&2
+            exit 1
+          fi
 
       - name: Clean build state
         run: ./gradlew --stop || true
@@ -54,7 +74,7 @@ jobs:
       - name: Build full signed release
         run: ./gradlew :androidApp:clean :androidApp:assembleFullRelease --stacktrace --no-build-cache
 
-      - name: Rename signed APKs to Pixbar package name
+      - name: Rename signed APKs to com.movie.pixbar
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -75,8 +95,11 @@ jobs:
           shopt -s nullglob
           apks=(androidApp/build/outputs/apk/full/release/com.movie.pixbar*.apk)
           (( ${#apks[@]} > 0 )) || { echo "No renamed signed APKs found." >&2; exit 1; }
+          apksigner="$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "${apksigner}"
           for apk in "${apks[@]}"; do
-            echo "Verified APK: ${apk}"
+            "${apksigner}" verify --verbose "${apk}"
+            echo "Verified signed APK: ${apk}"
             ls -lh "${apk}"
           done
 
