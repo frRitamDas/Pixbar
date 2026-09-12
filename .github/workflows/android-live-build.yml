@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: pixbar-android-live-${{ github.ref }}
@@ -149,3 +149,22 @@ jobs:
           name: pixbar-live-${{ github.sha }}
           path: androidApp/build/outputs/apk/full/release/com.movie.pixbar*.apk
           if-no-files-found: error
+
+      - name: Publish Pixbar 1.1 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v1.1"
+          release_title="Pixbar 1.1"
+          mapfile -t apks < <(find androidApp/build/outputs/apk/full/release -maxdepth 1 -type f -name 'com.movie.pixbar*.apk' -print | sort)
+          (( ${#apks[@]} == 5 )) || { echo "Expected exactly 5 APKs, found ${#apks[@]}." >&2; exit 1; }
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists; replacing its APK assets."
+            gh release delete "${tag}" --repo "${GITHUB_REPOSITORY}" --yes
+          fi
+          git fetch --tags origin
+          if git rev-parse --verify --quiet "refs/tags/${tag}"; then
+            git push origin --delete "${tag}"
+          fi
+          gh release create "${tag}" "${apks[@]}" --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" --title "${release_title}" --notes "Pixbar 1.1 Android release.\n\nIncludes signed APKs for arm64-v8a, armeabi-v7a, x86, x86_64, and universal devices.\n\nAll APKs were built and verified by GitHub Actions."
