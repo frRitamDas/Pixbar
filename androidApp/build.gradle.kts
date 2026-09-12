@@ -170,6 +170,11 @@ sentry {
 
 dependencies {
     implementation(project(":composeApp"))
+    // The Android application module's Kotlin compilation invokes the Compose compiler
+    // while compiling generated/application Kotlin. Keep the Compose runtime explicitly
+    // on this module's compile classpath so release builds do not fail with
+    // IncompatibleComposeRuntimeVersionException.
+    implementation(libs.compose-runtime)
     implementation(libs.androidx.appcompat)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     debugImplementation(libs.compose.uiTooling)
