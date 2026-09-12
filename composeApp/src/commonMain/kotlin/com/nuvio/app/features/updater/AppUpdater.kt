@@ -23,8 +23,8 @@ import kotlinx.coroutines.runBlocking
 import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.getString
 
-private const val gitHubOwner = "NuvioMedia"
-private const val gitHubRepo = "NuvioMobile"
+private const val gitHubOwner = "frRitamDas"
+private const val gitHubRepo = "Pixbar"
 private const val gitHubApiBase = "https://api.github.com"
 private const val releaseChannelBranch = "cmp-rewrite"
 
@@ -124,7 +124,7 @@ private object AppUpdaterRepository {
             url = "$gitHubApiBase/repos/$gitHubOwner/$gitHubRepo/releases?per_page=20",
             headers = mapOf(
                 "Accept" to "application/vnd.github+json",
-                "User-Agent" to "NuvioMobile",
+                "User-Agent" to "Pixbar",
             ),
             body = "",
         )
@@ -377,7 +377,7 @@ class AppUpdaterController internal constructor(
         _uiState.value = AppUpdaterUiState(
             update = AppUpdate(
                 tag = "9.9.9",
-                title = "Nuvio 9.9.9",
+                title = "Pixbar 9.9.9",
                 notes = """
                     A local preview of the new update experience.
 
@@ -386,7 +386,7 @@ class AppUpdaterController internal constructor(
                     - Release notes live behind the info button.
                 """.trimIndent(),
                 releaseUrl = null,
-                assetName = "Nuvio-debug-preview.apk",
+                assetName = "Pixbar-debug-preview.apk",
                 assetUrl = "debug://update-preview",
                 assetSizeBytes = 185L * 1024L * 1024L,
             ),
