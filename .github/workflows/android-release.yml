@@ -1,10 +1,10 @@
-name: Build Pixbar Release
+name: Build Pixbar Android Release
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Validate only, create a draft, or publish the release
+        description: Validate only, create a draft, or publish the Android release
         required: true
         type: choice
         options:
@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pixbar-release-${{ github.ref }}
+  group: pixbar-android-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -46,7 +46,6 @@ jobs:
       - name: Validate release state
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          RELEASE_COMMIT: ${{ steps.release.outputs.release_commit }}
           RELEASE_BRANCH: ${{ github.ref_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RELEASE_REF_TYPE: ${{ github.ref_type }}
@@ -93,13 +92,33 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
       - name: Configure release properties
         run: |
+          set -euo pipefail
           keystore_path="${RUNNER_TEMP}/pixbar-release.jks"
           printf '%s' "${RELEASE_KEYSTORE_BASE64}" | base64 --decode > "${keystore_path}"
+          test -s "${keystore_path}"
           printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
           sed -i -E '/^[[:space:]]*(sdk\.dir|PIXBAR_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
           printf '\nPIXBAR_RELEASE_STORE_FILE=%s\n' "${keystore_path}" >> local.properties
+      - name: Verify Android release signing configuration
+        run: |
+          set -euo pipefail
+          grep -q '^PIXBAR_RELEASE_STORE_PASSWORD=' local.properties
+          grep -q '^PIXBAR_RELEASE_KEY_ALIAS=' local.properties
+          grep -q '^PIXBAR_RELEASE_KEY_PASSWORD=' local.properties
+          grep -q '^PIXBAR_RELEASE_STORE_FILE=' local.properties
+          test -f "$(sed -n 's/^PIXBAR_RELEASE_STORE_FILE=//p' local.properties)"
       - name: Build full release APKs
         run: ./gradlew :androidApp:assembleFullRelease --stacktrace
+      - name: Verify APK outputs
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(androidApp/build/outputs/apk/full/release/*.apk)
+          if (( ${#apks[@]} == 0 )); then
+            echo "Android release build completed without producing APK files." >&2
+            exit 1
+          fi
+          printf 'Produced APK: %s\n' "${apks[@]}"
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -107,44 +126,10 @@ jobs:
           path: androidApp/build/outputs/apk/full/release/*.apk
           if-no-files-found: error
 
-  ios:
-    name: Build Pixbar iOS IPA
-    if: inputs.mode != 'dry-run'
-    needs: prepare
-    runs-on: macos-26
-    timeout-minutes: 120
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      GRADLE_OPTS: -Dfile.encoding=UTF-8
-      KOTLIN_DAEMON_JVMARGS: -Xmx2048M
-      PIXBAR_GRADLE_JVMARGS: -Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M
-      PIXBAR_KOTLIN_NATIVE_JVMARGS: -Xmx4608M
-      RELEASE_PROPERTIES_BASE64: ${{ secrets.PIXBAR_LOCAL_PROPERTIES_BASE64 }}
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v6
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 17
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-      - name: Prepare iOS dependencies
-        run: ./scripts/prepare-ios-dependencies.sh
-      - name: Build unsigned full IPA
-        run: ./scripts/build-ios-ipa.sh "${{ needs.prepare.outputs.version }}"
-      - name: Upload iOS artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: pixbar-${{ needs.prepare.outputs.version }}-ios-full-release
-          path: build/ios-ipa/*-full-release.ipa
-          if-no-files-found: error
-
   release:
-    name: Publish Pixbar ${{ inputs.mode }} release
+    name: Publish Pixbar Android ${{ inputs.mode }} release
     if: inputs.mode != 'dry-run'
-    needs: [prepare, android, ios]
+    needs: [prepare, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -155,20 +140,25 @@ jobs:
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
       RELEASE_BRANCH: ${{ github.ref_name }}
     steps:
-      - name: Download release artifacts
+      - name: Download Android artifacts
         uses: actions/download-artifact@v8
         with:
+          name: pixbar-${{ needs.prepare.outputs.version }}-android-full-release
           path: release-assets
-          merge-multiple: true
       - name: Download release notes
         uses: actions/download-artifact@v8
         with:
           name: release-notes
           path: release-assets
+      - name: Verify release packages
+        run: |
+          set -euo pipefail
+          mapfile -t release_files < <(find release-assets -maxdepth 1 -type f -name '*.apk' -print | sort)
+          (( ${#release_files[@]} > 0 )) || { echo "No Android APK packages were produced." >&2; exit 1; }
+          printf 'Release APK: %s\n' "${release_files[@]}"
       - name: Create GitHub release
         run: |
-          mapfile -t release_files < <(find release-assets -maxdepth 1 -type f \( -name '*.apk' -o -name '*.ipa' \) -print | sort)
-          (( ${#release_files[@]} > 0 )) || { echo "No release packages were produced." >&2; exit 1; }
+          mapfile -t release_files < <(find release-assets -maxdepth 1 -type f -name '*.apk' -print | sort)
           args=("${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --target "${RELEASE_BRANCH}" --title "Pixbar ${RELEASE_VERSION}" --notes-file release-assets/release-notes.md)
           [[ "${RELEASE_MODE}" == "draft" ]] && args+=(--draft)
           gh release create "${args[@]}" "${release_files[@]}"
